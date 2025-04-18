@@ -4,10 +4,11 @@ pragma solidity ^0.8.28;
 /**
     * @title Escrow Contract
     * @notice This contract implements an escrow service for buyers and sellers.
-    * @dev This contract allows a buyer to deposit funds into escrow for a purchase, with an arbiter to oversee the transaction.
+    * @dev This contract allows a buyer to deposit funds into escrow for a purchase, with an arbiter to complete the transaction.
     *      The funds are held until the arbiter marks the purchase as complete. 
-    *      Allows for partial deposits and cancellation of the escrow.
+    *      Allows for partial deposits and cancellation of the escrow if 24 hours have passed after the deposit.
     *      Uses a mapping to store the purchase details and a unique purchase ID is created using the buyer's address and the item ID.
+    *      Does not allow for the same item to be in multiple escrows at the same time.
     *      Emits events for new escrows, deposits, completions, and cancellations.
 
  */
@@ -15,6 +16,7 @@ contract Escrow {
 
     enum EscrowStatus { NotCreated, Created, PartlyDeposited, Deposited, Completed, Cancelled }
     
+    // store the purchase details:
     struct Purchase {
         address buyer;
         address seller;
@@ -29,14 +31,20 @@ contract Escrow {
         uint cancelledAt;
     }
 
+    // map a unique purchaseId based on the buyer and itemId to the Purchase details:
     mapping(bytes32 => Purchase) public purchases;
+
+    // map the itemId to the EscrowStatus (so that one item cannot be in multiple escrows):
+    mapping(uint => EscrowStatus) public itemStatus;
 
     constructor() {       
     }
 
     event NewEscrow(address indexed buyer, address indexed seller, uint256 itemId, uint256 price);
+
     function newEscrow(address buyer, address seller, address arbiter, uint itemId, uint price) external {
 
+        require(itemStatus[itemId] == EscrowStatus.NotCreated, "Item already in escrow");
         require(buyer != address(0), "Invalid buyer");
         require(seller != address(0), "Invalid seller");
         require(arbiter != address(0), "Invalid arbiter");
@@ -54,7 +62,7 @@ contract Escrow {
 
         require(purchase.status == EscrowStatus.NotCreated, "Escrow already created");
         
-        // add a new Escrow entry in the Purchase struct for the purchaseId:
+        // add a new Escrow entry in the mapping for the purchaseId:
         purchase.buyer = buyer;
         purchase.seller = seller;
         purchase.arbiter = arbiter;
@@ -62,6 +70,9 @@ contract Escrow {
         purchase.price = price;
         purchase.status = EscrowStatus.Created;
         purchase.createdAt = block.timestamp;
+
+        // set the item status to Created:
+        itemStatus[itemId] = EscrowStatus.Created;
 
         emit NewEscrow(buyer, seller, itemId, price);
         

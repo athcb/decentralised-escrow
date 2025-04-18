@@ -116,6 +116,19 @@ describe("Escrow", function () {
         expect(purchase.price).to.equal(price);
     });
 
+    it("newEscrow Function: cannot go into escrow for an itemID already in escrow by another buyer", async function () {
+        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
+        
+        await expect(escrow.connect(other).newEscrow(
+            other.address,
+            seller.address,
+            arbiter.address,
+            itemId,
+            price
+        )).to.be.revertedWith("Item already in escrow");
+
+    });
+
     it("deposit Function: Buyer deposits 1 ETH into escrow. Escrow status, escrowBalance and depositedAt are correctly updated. Event is emitted.", async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
