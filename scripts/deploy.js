@@ -4,15 +4,11 @@ require("dotenv").config();
 
 async function main() {
 
-    const privateKey = process.env.TEST_PRIVATE_KEY;
-    const url = process.env.ALCHEMY_TESTNET_URL;
-    const provider = new JsonRpcProvider(url);
-
-    const wallet = new ethers.Wallet(privateKey, provider);
+    const [deployer] = await ethers.getSigners()
 
     const contractArtifacts = await artifacts.readArtifact("Escrow"); 
 
-    const Escrow = new ethers.ContractFactory(contractArtifacts.abi, contractArtifacts.bytecode, wallet);
+    const Escrow = new ethers.ContractFactory(contractArtifacts.abi, contractArtifacts.bytecode, deployer);
     const escrow = await Escrow.deploy();
     await escrow.waitForDeployment();
 

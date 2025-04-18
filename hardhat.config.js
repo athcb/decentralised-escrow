@@ -8,6 +8,9 @@ module.exports = {
     sepolia: {
       url: process.env.ALCHEMY_TESTNET_URL,
       accounts: [process.env.TEST_PRIVATE_KEY]
+    },
+    localhost: {
+      url: "http://127.0.0.1:8545", // Local Hardhat node URL
     }
   }
 };
