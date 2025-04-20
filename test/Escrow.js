@@ -6,20 +6,23 @@ describe("Escrow", function () {
 
     async function deployEscrowFixture() {
 
-        const Escrow = await ethers.getContractFactory("Escrow");
+        const itemId = 1;
+        const itemIdAttack = 2; // itemID for the reentrancy attack
+        const price = ethers.parseEther("0.5"); // price of item offered by the seller (used for both normal & attack usecases)
+
+        const [buyer, seller, arbiter, other, attacker] = await ethers.getSigners();
+
+        // deployment of Escrow contract :
+
+        // contract with state update after external calls, without nonReentrant:
+        const Escrow = await ethers.getContractFactory("EscrowCompromised");
+        
+        // contract with state update before external calls & nonReentrant:
+        //const Escrow = await ethers.getContractFactory("Escrow");
         const escrow = await Escrow.deploy();
         await escrow.waitForDeployment();
 
         console.log(`Escrow deployed to address: ${await escrow.target}`);
-
-        const [buyer, seller, arbiter, other] = await ethers.getSigners();
-
-        console.log("Buyer address:", buyer.address);
-        console.log("Seller address:", seller.address);
-        console.log("Arbiter address:", arbiter.address);
-        console.log("Other address:", other.address);   
-
-        const itemId = 1;
 
         const abiCoder = new ethers.AbiCoder();
         const purchaseId = ethers.keccak256(abiCoder.encode(
@@ -28,14 +31,25 @@ describe("Escrow", function () {
         ));
         console.log("Purchase ID:", purchaseId);
 
+        // deployment of Attack contract:
+        const Attack = await ethers.getContractFactory("Attack");
+        const attack = await Attack.deploy(
+            escrow.target,
+            itemIdAttack,
+            { value: ethers.parseEther("1") } // transfer 1 ETH to the Attack contract
+        );
 
-        const price = ethers.parseEther("0.1");
+        const purchaseIdAttack = ethers.keccak256(abiCoder.encode(
+            ["address", "uint256"], 
+            [attacker.address, itemIdAttack]
+        ));
+        console.log("Attacker's Purchase ID:", purchaseIdAttack);
 
-        return { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price };
+        return { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price };
     }
 
     async function initializeNewEscrow() {
-        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(deployEscrowFixture);
+        const { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price } = await loadFixture(deployEscrowFixture);
 
         const tx = await escrow.connect(buyer).newEscrow(
             buyer.address,
@@ -47,30 +61,31 @@ describe("Escrow", function () {
 
         await tx.wait();
 
-        return { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price };
+        return { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price };
     }
 
     async function initializeNewEscrowAndDeposit() {
-        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
+        const { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price } = await loadFixture(initializeNewEscrow);
 
         const txDeposit = await escrow.connect(buyer).deposit(itemId, { value: price });
         await txDeposit.wait();
 
-        return { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price };
+        return { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price };
     }
 
     async function initializeNewEscrowAndDepositAndComplete() {
-        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDeposit);
+        const { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price } = await loadFixture(initializeNewEscrowAndDeposit);
 
         const txComplete = await escrow.connect(arbiter).completePurchase(buyer, itemId);
         await txComplete.wait();
         
-        return { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price };
+        return { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price };
     }
 
 
-    it("newEscrow Function: Buyer can create new escrow in the purchases mapping", async function () {
-        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(deployEscrowFixture);
+    it(`newEscrow() test: 
+        Buyer can create new escrow in the purchases mapping`, async function () {
+        const { escrow, attack, buyer, seller, arbiter, other, attacker, itemId, purchaseId, purchaseIdAttack, price } = await loadFixture(deployEscrowFixture);
         
         const tx = await escrow.connect(buyer).newEscrow(
             buyer.address,
@@ -94,7 +109,11 @@ describe("Escrow", function () {
     
     });
 
-    it("newEscrow Function: arbiter can create new escrow in the purchases mapping. Purchase mapping is correctly updated and event is emitted", async function () {
+    it(`newEscrow() test: 
+        Arbiter can create new escrow in the purchases mapping. 
+        Purchase mapping is correctly updated.
+        Event is emitted`, async function () {
+        
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(deployEscrowFixture);
         
         await expect(escrow.connect(arbiter).newEscrow(
@@ -116,7 +135,8 @@ describe("Escrow", function () {
         expect(purchase.price).to.equal(price);
     });
 
-    it("newEscrow Function: cannot go into escrow for an itemID already in escrow by another buyer", async function () {
+    it(`newEscrow() test: 
+        Cannot go into escrow for an itemID already in escrow`, async function () {
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
         await expect(escrow.connect(other).newEscrow(
@@ -129,7 +149,10 @@ describe("Escrow", function () {
 
     });
 
-    it("deposit Function: Buyer deposits 1 ETH into escrow. Escrow status, escrowBalance and depositedAt are correctly updated. Event is emitted.", async function () {
+    it(`deposit() test: 
+        Buyer deposits 1 ETH into escrow. 
+        Escrow status, escrowBalance and depositedAt are correctly updated. 
+        Event is emitted.`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
 
@@ -145,7 +168,10 @@ describe("Escrow", function () {
 
     });
 
-    it("deposit Function: Buyer makes a partial deposit of 0.5 ETH into escrow. Escrow status, escrowBalance and depositedAt are correctly updated. Event is emitted.", async function () {
+    it(`deposit() test: 
+        Buyer makes a partial deposit of 0.5 ETH into escrow. 
+        Escrow status, escrowBalance and depositedAt are correctly updated. 
+        Event is emitted.`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
@@ -161,7 +187,9 @@ describe("Escrow", function () {
 
     });
 
-    it("deposit Function: Buyer makes two partial deposits of 0.5 ETH into escrow and escrow status, escrowBalance and depositedAt are correctly updated", async function () {
+    it(`deposit() test: 
+        Buyer makes two partial deposits of 0.5 ETH into escrow. 
+        Escrow status, escrowBalance and depositedAt are correctly updated`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
@@ -183,7 +211,8 @@ describe("Escrow", function () {
 
     });
 
-    it("deposit Function: Buyer is not allowed to deposit funds greater than the item price", async function () {
+    it(`deposit() test: 
+        Buyer is not allowed to deposit funds greater than the item price`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
@@ -191,7 +220,9 @@ describe("Escrow", function () {
 
     });
 
-    it("deposit Function: Buyer is not allowed to make a second deposit that would result in the escrowBalance being larger than the item price", async function () {
+    it(`deposit() test: 
+        Buyer is not allowed to make a second deposit that would result 
+        in the escrowBalance being larger than the item price`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
@@ -207,7 +238,8 @@ describe("Escrow", function () {
     
     });
 
-    it("deposit Function: Only the buyer can deposit", async function () {
+    it(`deposit() test: 
+        Only the buyer can deposit`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrow);
         
@@ -215,7 +247,9 @@ describe("Escrow", function () {
     
     });
 
-    it("completePurchase Function: The arbiter completes the purchase. The purchase status is correctly updated and the event is emitted.", async function () {
+    it(`completePurchase() test: 
+        The arbiter completes the purchase. 
+        The purchase status is correctly updated and the event is emitted.`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDeposit);
 
@@ -228,7 +262,8 @@ describe("Escrow", function () {
         expect(purchase.escrowBalance).to.equal(0);
     });
 
-    it("completePurchase Function: Seller is not allowed to call the function", async function () {
+    it(`completePurchase() test: 
+        Seller is not allowed to call the function`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDeposit);
 
@@ -236,7 +271,8 @@ describe("Escrow", function () {
 
     });
 
-    it("cancel Function: Buyer cannot cancel escrow if 24 hours have not passed since the deposit", async function () {
+    it(`cancel() test: 
+        Buyer cannot cancel escrow if 24 hours have not passed since the deposit`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDeposit);
 
@@ -244,7 +280,9 @@ describe("Escrow", function () {
 
     });
 
-    it("cancel Function: Buyer can cancel escrow if 24 hours have passed since the deposit. Check status, escrowBalance and emitted event.", async function () {
+    it(`cancel() test: 
+        Buyer can cancel escrow if 24 hours have passed since the deposit. 
+        Check status, escrowBalance and emitted event.`, async function () {
 
         const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDeposit);
 
@@ -261,12 +299,59 @@ describe("Escrow", function () {
         
     });
 
-    it("cancel Function: Buyer cannot cancel escrow if the purchase has been completed", async function () {
+    it(`cancel() test: 
+        Buyer cannot cancel escrow if the purchase has been completed`, async function () {
 
-        const { escrow, buyer, seller, arbiter, other, itemId, purchaseId, price } = await loadFixture(initializeNewEscrowAndDepositAndComplete);
+        const { escrow, buyer, itemId } = await loadFixture(initializeNewEscrowAndDepositAndComplete);
 
         await expect(escrow.connect(buyer).cancel(itemId)).to.be.revertedWith("Escrow not in correct state");
 
+    });
+
+    it(`REENTRANCY ATTACK on cancel(): 
+        Attacker starts with 1 ETH balance.
+        Attacker deposits 0.1 ETH into escrow. 
+        Escrow contract already has a balance of 0.5 ETH. 
+        Attacker cancels the escrow and withdraws their deposit plus the contract balance. 
+        Attacker's balance is now 1.5 ETH.`, async function () {
+        
+        const { escrow, attack, seller, arbiter, attacker, price } = await loadFixture(initializeNewEscrowAndDeposit);
+
+        // add a delay of 24 hours after the deposit
+        await network.provider.send("evm_increaseTime", [86400]); // 24 hours in seconds
+        await network.provider.send("evm_mine"); // mine a new block
+
+        const attackNewEscrow = await attack.connect(attacker).initializeEscrow(
+            seller.address,
+            arbiter.address,
+            price,
+            ethers.parseEther("0.1") // depositAmount
+        );
+
+        await attackNewEscrow.wait();
+        console.log("Attacker created new escrow and deposited 0.1 ETH");
+
+        await network.provider.send("evm_increaseTime", [86400]); // 24 hours in seconds
+        await network.provider.send("evm_mine"); // mine a new block
+
+        const escrowBalanceBefore = await ethers.provider.getBalance(escrow.target);
+        console.log(`Balance of the escrow contract before cancel call: ${ethers.formatEther(escrowBalanceBefore)} ETH`);
+
+        const attackerBalanceBefore = await ethers.provider.getBalance(attack.target);
+        console.log(`Balance of the attack contract before cancel call: ${ethers.formatEther(attackerBalanceBefore)} ETH`);
+
+        const withdrawFunds = await attack.connect(attacker).attack();
+        await withdrawFunds.wait();
+        console.log("Attack completed.");
+
+        const escrowBalanceAfter = await ethers.provider.getBalance(escrow.target);
+        console.log(`Balance of the escrow contract after cancel call: ${ethers.formatEther(escrowBalanceAfter)} ETH`);
+
+        const attackerBalanceAfter = await ethers.provider.getBalance(attack.target);
+        console.log(`Balance of the attack contract after cancel call: ${ethers.formatEther(attackerBalanceAfter)} ETH`);
+
+        expect(attackerBalanceAfter).to.equal(ethers.parseEther("1.5"));
+        expect(escrowBalanceAfter).to.equal(0);
     });
 
     

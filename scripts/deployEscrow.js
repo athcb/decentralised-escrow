@@ -6,7 +6,8 @@ async function main() {
 
     const [deployer] = await ethers.getSigners()
 
-    const contractArtifacts = await artifacts.readArtifact("Escrow"); 
+    //const contractArtifacts = await artifacts.readArtifact("Escrow"); 
+    const contractArtifacts = await artifacts.readArtifact("EscrowCompromised"); 
 
     const Escrow = new ethers.ContractFactory(contractArtifacts.abi, contractArtifacts.bytecode, deployer);
     const escrow = await Escrow.deploy();

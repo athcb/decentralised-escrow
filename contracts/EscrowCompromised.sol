@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
 /**
 * @title Escrow Contract
 * @notice This contract implements an escrow service for buyers and sellers.
@@ -16,7 +14,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  */
 
 
-contract Escrow is ReentrancyGuard {
+contract EscrowCompromised {
 
     enum EscrowStatus { NotCreated, Created, PartlyDeposited, Deposited, Completed, Cancelled }
     
@@ -148,7 +146,7 @@ contract Escrow is ReentrancyGuard {
 
     }
 
-    function completePurchase(address buyer, uint itemId) external nonReentrant {
+    function completePurchase(address buyer, uint itemId) external {
 
         // re-create the unique purchase Id with the msg.sender as the buyer and the itemID:
         bytes32 purchaseId = getPurchaseId(buyer, itemId);
@@ -160,24 +158,22 @@ contract Escrow is ReentrancyGuard {
         require(msg.sender == purchase.arbiter, "Only arbiter can complete the purchase");
         require(purchase.status == EscrowStatus.Deposited,  "Escrow not in correct state");
         require(purchase.price == purchase.escrowBalance,  "Price and balance mismatch");
-        
-        uint256 transferAmount = purchase.escrowBalance; 
+
+        // transfer the funds to the seller:
+        (bool success, ) = purchase.seller.call{ value: purchase.escrowBalance }("");
+        require(success, "Transfer failed");
 
         // update state:
         purchase.status = EscrowStatus.Completed;
         purchase.escrowBalance = 0;
         purchase.completedAt = block.timestamp;
-
-        // transfer the funds to the seller:
-        (bool success, ) = purchase.seller.call{ value: transferAmount }("");
-        require(success, "Transfer failed");
         
         // emit the Complete event:
         emit Complete(buyer, itemId);
     }
 
     // refund deposit if escrow is not completed:
-    function cancel(uint itemId) external nonReentrant {
+    function cancel(uint itemId) external {
 
         // re-create the unique purchase Id with the msg.sender as the buyer and the itemID:
         bytes32 purchaseId = getPurchaseId(msg.sender, itemId);
@@ -193,22 +189,20 @@ contract Escrow is ReentrancyGuard {
                 "Escrow not in correct state");  
         require(block.timestamp > purchase.depositedAt + 1 days, "Cancellation not allowed within 24 hours of deposit");  
 
-        uint256 refundAmount = purchase.escrowBalance;
+        // transfer the funds back to the buyer if a full or partial deposit was made:
+        if (purchase.status == EscrowStatus.Deposited || purchase.status == EscrowStatus.PartlyDeposited) {
+
+            // refund buyer
+            (bool success, ) = purchase.buyer.call{ value: purchase.escrowBalance }("");
+            require(success, "Transfer failed");
+
+        }
 
         // update state
         purchase.status = EscrowStatus.Cancelled;
         isItemInEscrow[itemId] = false;
         purchase.escrowBalance = 0;
         purchase.cancelledAt = block.timestamp;
-
-        // transfer the funds back to the buyer if a full or partial deposit was made:
-        if(refundAmount > 0) {
-
-            // refund buyer
-            (bool success, ) = purchase.buyer.call{ value: refundAmount }("");
-            require(success, "Transfer failed");
-
-        }
         
         // emit the Cancel event:
         emit Cancel(msg.sender, itemId);
